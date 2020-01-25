@@ -33,7 +33,6 @@ class Money(Decimal):
    def __repr__(self):
       return f"Money({self})"
    
-# TODO create object hook for decoding json into transactions and categories
 class Transaction:
    """
    a single line item in a financial statement. Contains fields for name, date, and 
@@ -114,7 +113,3 @@ class Budget:
    def remove(self, category):
       if category in self.categories:
          del self.categories[category]
-      
-
-
-

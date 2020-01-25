@@ -1,21 +1,21 @@
+import json
+
 # Main Dash
 
-dash = """
-Hi I'm Buddy!
-
-view        view budget plan according to options 
-status      view current income and spending
-add         add a cashflow category to the budget plan
-remove      remove a cashflow category to the budget plan
-spend       add an expense
-earn        add income
-"""[1:]
-
+INTRO = "Hi I'm Buddy!"
 INPUT_ARRROW = "> "
 COMMAND_ARROW = ">>> "
+MIN_DESC_START = 12
+MIN_SPACE_COMM_DESC = 3
 
-def print_dashboard():
-   print(dash)
+def print_dashboard(command_to_desc):
+   print(INTRO)
+   start_description = max([len(command) for command in command_to_desc]) + MIN_SPACE_COMM_DESC
+   start_description = max(start_description, MIN_DESC_START)
+   for command in command_to_desc:
+      print(command + 
+            " " * (start_description - len(command)) + 
+            command_to_desc[command])
 
 def eofinput(prompt):
    try:

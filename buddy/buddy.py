@@ -30,13 +30,15 @@ income budget json file --
 }
 """
 
-import os
 from pathlib import Path
+import os
 import sys
-import json
 import budget
 import interface
-import commands
+import command
+import json
+
+# TODO factor out json deserialization into classes
 
 class CorruptedInputError(KeyError):
    """
@@ -78,8 +80,8 @@ def construct_budget(file_path, prompt):
    returns a dictionary of categories to category data
    """
    if os.path.isfile(file_path):
-      with open(file_path) as json_data:
-         budget_data = json.load(json_data, object_hook=decode_budget_json)
+      with open(file_path) as data:
+         budget_data = json.load(data, object_hook=decode_budget_json)
    else:
       budget_data = {name: budget.Category(exp) 
                      for name, exp in interface.collect_input(arrow=interface.INPUT_ARRROW)}
@@ -93,7 +95,14 @@ if __name__ == "__main__":
    income_budget = construct_budget(income_file, prompt_fstring.format("income"))
    expense_budget = construct_budget(expense_file, prompt_fstring.format("expenses"))
 
-   interface.print_dashboard()
-   dispatch = commands.Dispatch({})
-   for command in interface.collect_input(arrow=interface.COMMAND_ARROW):
-      dispatch.execute(command.Request)
+   registry = {"view": ("view full budget plan with options", None),
+               "status": ("view current income and spending", None),
+               "add": ("add cashflow categories to the budget plan", None), 
+               "remove": ("remove cashflow categories from the budget plan", None),
+               "spend": ("add an expense", None),
+               "earn": ("add income", None)}
+
+   interface.print_dashboard({comm: registry[comm][0] for comm in registry})
+   dispatch = command.Dispatch({comm: registry[comm][1] for comm in registry})
+   for comm in interface.collect_input(arrow=interface.COMMAND_ARROW):
+      pass
