@@ -1,5 +1,3 @@
-import json
-
 # Main Dash
 
 INTRO = "Hi I'm Buddy!"
@@ -9,7 +7,7 @@ MIN_DESC_START = 12
 MIN_SPACE_COMM_DESC = 3
 
 def print_dashboard(command_to_desc):
-   print(INTRO)
+   print(INTRO + '\n')
    start_description = max([len(command) for command in command_to_desc]) + MIN_SPACE_COMM_DESC
    start_description = max(start_description, MIN_DESC_START)
    for command in command_to_desc:
@@ -28,3 +26,7 @@ def collect_input(*, arrow):
    while read != "":
       yield read.split()
       read = eofinput(arrow)
+
+class Formatter:
+   def __init__(self):
+      pass

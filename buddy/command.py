@@ -1,48 +1,57 @@
+# Exception Classes
+
 class InvalidRequestError(ValueError):
-   def __init__(self, request, msg=""):
+   def __init__(self, request):
       self.request = request
-      self.msg = msg
 
-class Handler:
-   def __init__(self, func=None):
-      self.func = func
+class CommandError(KeyError):
+   def __init__(self, arg):
+      self.arg = arg
 
-   def does(self, func):
-      self.func = func
+# Class and Function Definitions
+
+def _index_of_next_opt(word_list, possible_opts, *, start=0):
+   """returns the index in word_list where mark is the first letter. 
+   returns the length of word_list if not found."""
+   for i in range(start, len(word_list)):
+      if word_list[i] in possible_opts:
+         return i
+   return len(word_list)
 
 class Command:
-   def __init__(self, name, options):
-      self.name = name
-      if options:
-         self.options = {opt: Handler() for opt in options}
 
-   def add_option(self, option):
-      self.options[option] = Handler()
-      return self.options[option]
+   PARSED_ARGS = 0
+   PARSED_OPTS = 1
 
-class Dispatch:
-   def __init__(self):
-      self.command_dispatch = {}
-   
-   def add(self, *, command, options=None):
-      self.command_dispatch[command] = Command(command, options)
-      return self.command_dispatch[command]
+   def __options_to_dict(self, word_list: list):
+      "pre: word_list is a list containing only options and filters"
+      opts = {}
+      opt_start = 0
+      opt_end = _index_of_next_opt(word_list, self.possible_opts, start=opt_start + 1)
+      while opt_end < len(word_list):
+         opts[word_list[opt_start]] = word_list[opt_start + 1:opt_end]
+         opt_start = opt_end
+         opt_end = _index_of_next_opt(word_list, self.possible_opts, start=opt_start + 1)
+      opts[word_list[opt_start]] = word_list[opt_start + 1:opt_end]
+      return opts
 
-   def execute(self, request):
-      try:
-         if request.command in self.command_dispatch:
-            self.command_dispatch[request.command](request.command_args)
-         else:
-            raise InvalidRequestError(request, "command not implemented")
-      except TypeError:
-         raise InvalidRequestError(request, 
-                  f"{request.command} present, but arguments are invalid")
+   def __init__(self, possible_opts, handler):
+      self.possible_opts = set(possible_opts)
+      self.handler = handler
 
-   def __getitem__(self, command):
-      return self.command_dispatch[command]
+   def parse(self, parse_string):
+      """Given a string of arguments, filters, and options, return a tuple
+      of base arguments, and a dictionary mapping option names to values"""
+      word_list = parse_string.split()
+      if len(word_list) == 0:
+         raise InvalidRequestError(parse_string)
+      opt_start = _index_of_next_opt(word_list, self.possible_opts)
+      args = word_list[:opt_start]
+      options = (self.__options_to_dict(word_list[opt_start:]) 
+                 if opt_start < len(word_list) else None)
+      return args, options
 
-class Request:
-   "expression tree for queries and actions"
-   def __init__(self, expression):
-      if len(expression) == 0:
-         raise InvalidRequestError(expression)
+   def execute(self, parsed):
+      """Executes the handler associated with this command with the given arguments"""
+      args, opts = parsed
+      self.handler(*args, **opts)
