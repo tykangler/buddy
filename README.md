@@ -21,6 +21,5 @@ for this to be a large project, just something quick and dirty.
 ### TODOs
 
 * Implement handlers for all commands
-* Implement command loop
 * Factor out formatting to interface
-* Budget class to track both income and expense budgets
+* 
