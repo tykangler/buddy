@@ -1,6 +1,7 @@
 from decimal import Decimal, getcontext, Context
 import json
-import itertools
+import datetime
+import form
 
 """
 income budget json file --
@@ -41,9 +42,6 @@ budget python obj input --
        }
 }
 """
-def create_assigner(next_id=0):
-   return itertools.count(next_id)
-
 class CorruptedInputError(KeyError):
    """
    budget input file has missing or incorrect keys, or an excess of keys
@@ -79,8 +77,11 @@ class Transaction:
    def from_json(cls, obj):
       return cls(**obj)
 
+   def to_json(self):
+      return dict(name=self.name, amount=float(self.amount), date=str(self.date))
+
    def __repr__(self):
-      return f"Transaction({self.name}, {self.date}, {self.amount})"
+      return f"Transaction({self.name}, {self.amount}, {self.date})"
 
 class Group:
    """
@@ -100,7 +101,13 @@ class Group:
                       for id_num in transactions}
       new_group = cls(obj["name"], obj["expected"])
       new_group.transactions = transactions
+      new_group.actual = Money(obj["actual"])
       return new_group
+
+   def to_json(self):
+      transactions = {id_num: self.transactions[id_num].to_json() for id_num in self.transactions}
+      return dict(name=self.name, expected=float(self.expected), 
+                  actual=float(self.actual), transactions=transactions)
 
    def __getitem__(self, id_num):
       return self.transactions[id_num]
@@ -113,31 +120,43 @@ class Budget:
    tracks expected and actual planned dollar amounts
    """
 
-   def __init__(self, assigner):
-      self.assigner = assigner
+   def __init__(self):
       self.groups = {}
-      self.trans_to_group = {}
+      self.tran_to_group = {}
       self.planned = Money(0)
       self.actual = Money(0)
 
    @classmethod
    def from_json(cls, obj):
-      return cls({id_num: Group.from_json(obj[id_num]) for id_num in obj})
+      new_budget = cls()
+      groups = obj["groups"]
+      new_budget.groups = {id_num: Group.from_json(groups[id_num]) for id_num in groups}
+      new_budget.tran_to_group = obj["tran_to_group"]
+      new_budget.planned = Money(obj["planned"])
+      new_budget.actual = Money(obj["actual"])
+      return new_budget
+
+   def to_json(self):
+      groups = {id_num: self.groups[id_num].to_json() for id_num in self.groups}
+      return dict(groups=groups, tran_to_group=self.tran_to_group, 
+                  planned=float(self.planned), actual=float(self.actual))
 
    def __iter__(self):
       return iter(self.groups)
 
-   def __getitem__(self, id_num):
-      if id_num in self.groups:
-         return self.groups[id_num]
-      elif id_num in self.trans_to_group:
-         group_id = self.trans_to_group[id_num]
-         return self.groups[group_id][id_num]
-      else:
+   def group(self, id_num):
+      if id_num not in self.groups:
          raise ValueError("entry not found with id number")
+      return self.groups[id_num]
+
+   def transaction(self, id_num):
+      if id_num not in self.tran_to_group:
+         raise ValueError("entry not found with id number")
+      group_id = self.tran_to_group[id_num]
+      return self.groups[group_id][id_num]
 
    def __contains__(self, id_num):
-      return id_num in self.groups or id_num in self.trans_to_group
+      return id_num in self.groups or id_num in self.tran_to_group
 
    def total_planned(self):
       return self.planned
@@ -149,19 +168,27 @@ class Budget:
       return len(self.groups)
 
    def num_transactions(self):
-      return len(self.trans_to_group)
+      return len(self.tran_to_group)
 
    def is_group(self, id_num):
       return id_num in self.groups
 
    def is_transaction(self, id_num):
-      return id_num in self.trans_to_group
+      return id_num in self.tran_to_group
 
-   def add_group(self, **group_args): 
-      group_id = next(self.assigner)
+   def add_group(self, group_id, **group_args): 
       self.planned += Money(group_args["expected"])
       self.groups[group_id] = Group(**group_args)
       return group_id
+
+   def add_transaction(self, group_id, transaction_id, **trans_args):
+      amt_to_add = Money(trans_args["amount"])
+      group = self.groups[group_id]
+      self.tran_to_group[transaction_id] = group_id
+      group[transaction_id] = Transaction(**trans_args)
+      self.actual += amt_to_add
+      group.actual += amt_to_add
+      return transaction_id
 
    def remove_group(self, group_id):
       if group_id not in self.groups:
@@ -169,34 +196,26 @@ class Budget:
       amt_to_remove_planned = self.groups[group_id].expected
       amt_to_remove_actual = self.groups[group_id].actual
       for transaction_id in self.groups[group_id].transactions:
-         del self.trans_to_group[transaction_id]
+         del self.tran_to_group[transaction_id]
       del self.groups[group_id]
       self.planned -= amt_to_remove_planned
       self.actual -= amt_to_remove_actual
 
    def remove_transaction(self, transaction_id):
-      if transaction_id not in self.trans_to_group:
+      if transaction_id not in self.tran_to_group:
          raise ValueError("transaction not found")
       amt_to_remove = self.groups[transaction_id].amount
       del self.groups[transaction_id]
-      del self.trans_to_group[transaction_id]
+      del self.tran_to_group[transaction_id]
       self.actual -= amt_to_remove
 
-   def remove(self, id_num):
+   def remove_entry(self, id_num):
       if id_num in self:
          if self.is_group(id_num):
             self.remove_group(id_num)
          else:
             self.remove_transaction(id_num)
 
-   def add_transaction(self, group_id, **trans_args):
-      transaction_id = next(self.assigner)
-      amt_to_add = Money(trans_args["amount"])
-      group = self.groups[group_id]
+   def print(self, printer):
+      printer.print(self)
 
-      self.trans_to_group[transaction_id] = group_id
-      group[transaction_id] = Transaction(**trans_args)
-      self.actual += amt_to_add
-      group.actual += amt_to_add
-
-      return transaction_id

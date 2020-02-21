@@ -8,8 +8,6 @@ for this to be a large project, just something quick and dirty.
 | Module | Finished | Tested | Notes |
 |:-------|:--------:|:------:|:------|
 | budget |    ❌   |   ❌   |       |
-| interface |  ❌  |   ✔️   | Untested for long command strings |
-| command |   ✔️   |   ❌   | Tests limited, expect dispatch to be implemented in main |
 
 ## Issues
 
@@ -22,4 +20,3 @@ for this to be a large project, just something quick and dirty.
 
 * Implement handlers for all commands
 * Factor out formatting to interface
-* 
