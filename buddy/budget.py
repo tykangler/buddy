@@ -56,13 +56,31 @@ class Money(Decimal):
    string and repr functionality
    """
    PRECISION = 2
-
    def __str__(self):
       return str(self.quantize(Decimal(10) ** -Money.PRECISION))
-
    def __repr__(self):
       return f"Money({self})"
-   
+   def __add__(self, other):
+      return Money(super().__add__(other))
+   def __sub__(self, other):
+      return Money(super().__sub__(other))
+   def __mul__(self, other):
+      return Money(super().__mul__(other))
+   def __truediv__(self, other):
+      return Money(super().__truediv__(other))
+   def __floordiv__(self, other):
+      return Money(super().__floordiv__(other))
+   def __radd__(self, other):
+      return self.__add__(other)
+   def __rsub__(self, other):
+      return self.__sub__(other)
+   def __rmul__(self, other):
+      return self.__mul__(other)
+   def __rtruediv__(self, other):
+      return self.__truediv__(other)
+   def __rfloordiv__(self, other):
+      return self.__rfloordiv__(other)
+
 class Transaction:
    """
    a single line item in a financial statement. Contains fields for name, date, and 
@@ -99,7 +117,7 @@ class Group:
       transactions = obj["transactions"]
       transactions = {id_num: Transaction.from_json(transactions[id_num])
                       for id_num in transactions}
-      new_group = cls(obj["name"], obj["expected"])
+      new_group = cls(obj["name"], Money(obj["expected"]))
       new_group.transactions = transactions
       new_group.actual = Money(obj["actual"])
       return new_group
@@ -112,8 +130,14 @@ class Group:
    def __getitem__(self, id_num):
       return self.transactions[id_num]
 
+   def __setitem__(self, id_num, value):
+      self.transactions[id_num] = value
+
    def __contains__(self, id_num):
       return id_num in self.transactions
+
+   def __repr__(self):
+      return f"Group({self.name}, {self.expected}, {self.actual}, {self.transactions})"
    
 class Budget:
    """
@@ -184,8 +208,8 @@ class Budget:
    def add_transaction(self, group_id, transaction_id, **trans_args):
       amt_to_add = Money(trans_args["amount"])
       group = self.groups[group_id]
-      self.tran_to_group[transaction_id] = group_id
       group[transaction_id] = Transaction(**trans_args)
+      self.tran_to_group[transaction_id] = group_id
       self.actual += amt_to_add
       group.actual += amt_to_add
       return transaction_id
