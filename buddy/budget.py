@@ -1,245 +1,137 @@
-from decimal import Decimal, getcontext, Context
-import json
+from decimal import Decimal
+from itertools import chain
 import datetime
-import form
 
-"""
-income budget json file --
-{
-   0: {
-      'name': 'work' 
-      'expected': 1500, 
-      'transactions': { 
-         0: {
-            'name': 'sbux', 
-            'amount': 400, 
-            'date': 01/15/2020
-         },
-         1: {
-            'name': 'sbux', 
-            'amount': 500, 
-            'date': 01/01/2020
-         }
-      }
-   },
-}
-
-budget python obj input --
-{
-   0: <type 'Group', 
-       name='work',
-       expected=1500, 
-       transactions={
-          0: <type 'Transaction'
-              name='sbux'
-              amount=400,
-              date='01/15/2020' # consider datetime object
-          >,
-          1: <type 'Transaction'
-              name='sbux',
-              amount=500,
-              date='01/01/2020'
-       }
-}
-"""
-class CorruptedInputError(KeyError):
-   """
-   budget input file has missing or incorrect keys, or an excess of keys
-   """
-   def __init__(self, inp, msg=None):
-      self.corrupted = inp
-      self.msg = msg if msg else ""
-
-class Money(Decimal):
-   """
-   class representing dollar amounts. subclasses Decimal and overrides
-   string and repr functionality
-   """
-   PRECISION = 2
-   def __str__(self):
-      return str(self.quantize(Decimal(10) ** -Money.PRECISION))
-   def __repr__(self):
-      return f"Money({self})"
-   def __add__(self, other):
-      return Money(super().__add__(other))
-   def __sub__(self, other):
-      return Money(super().__sub__(other))
-   def __mul__(self, other):
-      return Money(super().__mul__(other))
-   def __truediv__(self, other):
-      return Money(super().__truediv__(other))
-   def __floordiv__(self, other):
-      return Money(super().__floordiv__(other))
-   def __radd__(self, other):
-      return self.__add__(other)
-   def __rsub__(self, other):
-      return self.__sub__(other)
-   def __rmul__(self, other):
-      return self.__mul__(other)
-   def __rtruediv__(self, other):
-      return self.__truediv__(other)
-   def __rfloordiv__(self, other):
-      return self.__rfloordiv__(other)
-
-class Transaction:
-   """
-   a single line item in a financial statement. Contains fields for name, date, and 
-   amount earned in transaction
-   """
-   def __init__(self, name, amount, date):
+class Entry:
+   def __init__(self, name, expected):
       self.name = name
-      self.amount = Money(amount)
-      self.date = date
+      self.expected = Decimal(expected)
 
    @classmethod
    def from_json(cls, obj):
-      return cls(**obj)
+      new_section = cls(obj["name"], obj["expected"])
+      return new_section
 
    def to_json(self):
-      return dict(name=self.name, amount=float(self.amount), date=str(self.date))
+      return dict(name=self.name, expected=float(self.expected))
 
-   def __repr__(self):
-      return f"Transaction({self.name}, {self.amount}, {self.date})"
-
-class Group:
+class Section:
    """
-   A cash flow category. Contains an additional field, expected, over Transaction
-   representing the planned amount, as well as all transactions within the category
+   tracks expected dollar amounts
    """
-   def __init__(self, name, expected=0.00):
-      self.name = name
-      self.expected = Money(expected)
-      self.transactions = {}
-      self.actual = Money(0)
+   def __init__(self, name):
+      self._name = name
+      self._entries = {}
+      self._total = Decimal(0)
 
    @classmethod
    def from_json(cls, obj):
-      transactions = obj["transactions"]
-      transactions = {id_num: Transaction.from_json(transactions[id_num])
-                      for id_num in transactions}
-      new_group = cls(obj["name"], Money(obj["expected"]))
-      new_group.transactions = transactions
-      new_group.actual = Money(obj["actual"])
-      return new_group
+      new_section = cls(obj["name"])
+      entries = obj["entries"]
+      new_section._entries = {entry_id: Entry.from_json(entries[entry_id]) 
+                              for entry_id in entries}
+      new_section._total = Decimal(obj["total"])
+      return new_section
 
    def to_json(self):
-      transactions = {id_num: self.transactions[id_num].to_json() for id_num in self.transactions}
-      return dict(name=self.name, expected=float(self.expected), 
-                  actual=float(self.actual), transactions=transactions)
+      return dict(name=self._name,
+                  entries={entry_id: self._entries[entry_id].to_json() for entry_id in self._entries},
+                  total=float(self._total))
 
-   def __getitem__(self, id_num):
-      return self.transactions[id_num]
-
-   def __setitem__(self, id_num, value):
-      self.transactions[id_num] = value
-
-   def __contains__(self, id_num):
-      return id_num in self.transactions
-
-   def __repr__(self):
-      return f"Group({self.name}, {self.expected}, {self.actual}, {self.transactions})"
+   def plan(self, entry_id, name, expected):
+      self._entries[entry_id] = Entry(name, expected)
+      self._total += expected
    
+   def remove(self, entry_id):
+      amt = self._entries[entry_id].expected
+      del self._entries[entry_id]
+      self._total -= amt
+
+   def __iter__(self):
+      return iter(self._entries)
+
+   def __getitem__(self, entry_id):
+      return self._entries[entry_id]
+
+   def __contains__(self, entry_id):
+      return entry_id in self._entries
+
+   def __len__(self):
+      return len(self._entries)
+
+   def __eq__(self, other):
+      return self._name == other._name
+
+   def name(self):
+      return self._name
+
+   def total(self):
+      return self._total
+
 class Budget:
    """
-   tracks expected and actual planned dollar amounts
+   Used to plan transactions and exchanges. Entries are organized into two sections:
+   income, and expense.
+   Args:
+      name (str): The name of the budget
+      from_date (str, datetime.date): Beginning of the date range
+      to_date (str, datetime.date): End of the date range
    """
 
-   def __init__(self):
-      self.groups = {}
-      self.tran_to_group = {}
-      self.planned = Money(0)
-      self.actual = Money(0)
+   SECTIONS = ["income", "expense"]
+   INCOME, EXPENSE = 0, 1
+   
+   def __init__(self, name, from_date, to_date):
+      self._name = name
+      self._from = datetime.date(from_date)
+      self._to = datetime.date(to_date)
+      self._sections = [Section(sect_name) for sect_name in self.SECTIONS]
 
    @classmethod
    def from_json(cls, obj):
-      new_budget = cls()
-      groups = obj["groups"]
-      new_budget.groups = {id_num: Group.from_json(groups[id_num]) for id_num in groups}
-      new_budget.tran_to_group = obj["tran_to_group"]
-      new_budget.planned = Money(obj["planned"])
-      new_budget.actual = Money(obj["actual"])
+      new_budget = cls(name=obj["name"], from_date=obj["from_date"], to_date=obj["to_date"])
+      sections = obj["sections"]
+      new_budget._sections = [Section.from_json(sect_name) for sect_name in sections]
       return new_budget
 
    def to_json(self):
-      groups = {id_num: self.groups[id_num].to_json() for id_num in self.groups}
-      return dict(groups=groups, tran_to_group=self.tran_to_group, 
-                  planned=float(self.planned), actual=float(self.actual))
+      return dict(name=self._name,
+                  from_date=self._from, to_date=self._to, 
+                  sections=[section.to_json() for section in self._sections])
+
+   def name(self):
+      return self._name
+
+   def start_date(self):
+      return self._from
+   
+   def end_date(self):
+      return self._to
+
+   def balance(self):
+      "returns total income minus total expenses"
+      return self._sections[self.INCOME].total() - self._sections[self.EXPENSE].total()
+
+   def income(self):
+      return self._sections[self.INCOME]
+
+   def expense(self):
+      return self._sections[self.EXPENSE]
 
    def __iter__(self):
-      return iter(self.groups)
+      return chain(*(iter(sect) for sect in self._sections))
 
-   def group(self, id_num):
-      if id_num not in self.groups:
-         raise ValueError("entry not found with id number")
-      return self.groups[id_num]
+   def __getitem__(self, entry_id):
+      sect = entry_id in self
+      if not sect:
+         raise KeyError("entry not found")
+      return sect.name, sect[entry_id]
 
-   def transaction(self, id_num):
-      if id_num not in self.tran_to_group:
-         raise ValueError("entry not found with id number")
-      group_id = self.tran_to_group[id_num]
-      return self.groups[group_id][id_num]
-
-   def __contains__(self, id_num):
-      return id_num in self.groups or id_num in self.tran_to_group
-
-   def total_planned(self):
-      return self.planned
-
-   def total_actual(self):
-      return self.actual
-
-   def num_groups(self):
-      return len(self.groups)
-
-   def num_transactions(self):
-      return len(self.tran_to_group)
-
-   def is_group(self, id_num):
-      return id_num in self.groups
-
-   def is_transaction(self, id_num):
-      return id_num in self.tran_to_group
-
-   def add_group(self, group_id, **group_args): 
-      self.planned += Money(group_args["expected"])
-      self.groups[group_id] = Group(**group_args)
-      return group_id
-
-   def add_transaction(self, group_id, transaction_id, **trans_args):
-      amt_to_add = Money(trans_args["amount"])
-      group = self.groups[group_id]
-      group[transaction_id] = Transaction(**trans_args)
-      self.tran_to_group[transaction_id] = group_id
-      self.actual += amt_to_add
-      group.actual += amt_to_add
-      return transaction_id
-
-   def remove_group(self, group_id):
-      if group_id not in self.groups:
-         raise ValueError("group not found")
-      amt_to_remove_planned = self.groups[group_id].expected
-      amt_to_remove_actual = self.groups[group_id].actual
-      for transaction_id in self.groups[group_id].transactions:
-         del self.tran_to_group[transaction_id]
-      del self.groups[group_id]
-      self.planned -= amt_to_remove_planned
-      self.actual -= amt_to_remove_actual
-
-   def remove_transaction(self, transaction_id):
-      if transaction_id not in self.tran_to_group:
-         raise ValueError("transaction not found")
-      amt_to_remove = self.groups[transaction_id].amount
-      del self.groups[transaction_id]
-      del self.tran_to_group[transaction_id]
-      self.actual -= amt_to_remove
-
-   def remove_entry(self, id_num):
-      if id_num in self:
-         if self.is_group(id_num):
-            self.remove_group(id_num)
-         else:
-            self.remove_transaction(id_num)
-
-   def print(self, printer):
-      printer.print(self)
-
+   def __contains__(self, entry_id):
+      for sect in self._sections:
+         if entry_id in sect:
+            return sect
+      return None
+         
+   def __str__(self):
+      return self._name
