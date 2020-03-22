@@ -5,7 +5,7 @@ import datetime
 class Entry:
    def __init__(self, name, expected):
       self.name = name
-      self.expected = Decimal(expected)
+      self._expected = Decimal(expected)
 
    @classmethod
    def from_json(cls, obj):
@@ -13,14 +13,22 @@ class Entry:
       return new_section
 
    def to_json(self):
-      return dict(name=self.name, expected=float(self.expected))
+      return dict(name=self.name, expected=float(self._expected))
+
+   @property
+   def expected(self):
+      return self._expected
+
+   @expected.setter
+   def expected(self, new_val):
+      self._expected = Decimal(new_val)
 
 class Section:
    """
    tracks expected dollar amounts
    """
    def __init__(self, name):
-      self._name = name
+      self.name = name
       self._entries = {}
       self._total = Decimal(0)
 
@@ -34,7 +42,7 @@ class Section:
       return new_section
 
    def to_json(self):
-      return dict(name=self._name,
+      return dict(name=self.name,
                   entries={entry_id: self._entries[entry_id].to_json() for entry_id in self._entries},
                   total=float(self._total))
 
@@ -60,11 +68,9 @@ class Section:
       return len(self._entries)
 
    def __eq__(self, other):
-      return self._name == other._name
+      return self.name == other.name
 
-   def name(self):
-      return self._name
-
+   @property
    def total(self):
       return self._total
 
@@ -72,66 +78,92 @@ class Budget:
    """
    Used to plan transactions and exchanges. Entries are organized into two sections:
    income, and expense.
-   Args:
+   args:
       name (str): The name of the budget
-      from_date (str, datetime.date): Beginning of the date range
-      to_date (str, datetime.date): End of the date range
+      start (str, datetime.date): Beginning of the date range, Must be less than end
+      end (str, datetime.date): End of the date range, Must be greater than start
    """
 
    SECTIONS = ["income", "expense"]
    INCOME, EXPENSE = 0, 1
    
-   def __init__(self, name, from_date, to_date):
-      self._name = name
-      self._from = datetime.date(from_date)
-      self._to = datetime.date(to_date)
+   def __init__(self, name, start, end):
+      self.name = name
+      self._start = datetime.date(start)
+      self._end = datetime.date(end)
       self._sections = [Section(sect_name) for sect_name in self.SECTIONS]
 
    @classmethod
    def from_json(cls, obj):
-      new_budget = cls(name=obj["name"], from_date=obj["from_date"], to_date=obj["to_date"])
+      new_budget = cls(name=obj["name"], start=obj["start"], end=obj["end"])
       sections = obj["sections"]
       new_budget._sections = [Section.from_json(sect_name) for sect_name in sections]
       return new_budget
 
    def to_json(self):
-      return dict(name=self._name,
-                  from_date=self._from, to_date=self._to, 
+      return dict(name=self.name,
+                  start=self._start, end=self._end, 
                   sections=[section.to_json() for section in self._sections])
-
-   def name(self):
-      return self._name
-
-   def start_date(self):
-      return self._from
    
-   def end_date(self):
-      return self._to
+   @property
+   def start(self):
+      "return the beginning of the date range for budget"
+      return self._start
 
+   @start.setter
+   def start(self, new_date):
+      "set the beginning of date range for budget. new date must be less than end of date range."
+      if new_date >= self._end:
+         raise ValueError(f"{new_date} not less than end of date range {self._end}")
+      self._start = datetime.date(new_date)
+   
+   @property
+   def end(self):
+      """return the end of the date range for budget. new date must be greater than beginning 
+      of date range."""
+      return self._end
+
+   @end.setter
+   def end(self, new_date):
+      """set the end of the date range for budget. new date must be greater than beginning 
+      of the date range."""
+      if new_date <= self._start:
+         raise ValueError(f"{new_date} not greater than start of date range {self._start}")
+      self._end = datetime.date(new_date)
+
+   @property
    def balance(self):
       "returns total income minus total expenses"
-      return self._sections[self.INCOME].total() - self._sections[self.EXPENSE].total()
+      return self._sections[self.INCOME].total - self._sections[self.EXPENSE].total
 
    def income(self):
+      "return the income section of this budget"
       return self._sections[self.INCOME]
 
    def expense(self):
+      "return the expense section of this budget"
       return self._sections[self.EXPENSE]
 
    def __iter__(self):
+      "iterate over all id values in the budget"
       return chain(*(iter(sect) for sect in self._sections))
 
    def __getitem__(self, entry_id):
+      """retrieves the entry associated with entry_id. returns a tuple with
+      the first element being the section name and the second being the entry
+      object - (section_name, entry)"""
       sect = entry_id in self
       if not sect:
          raise KeyError("entry not found")
       return sect.name, sect[entry_id]
 
    def __contains__(self, entry_id):
+      """if entry_id is found within any section, then the section it was found in is
+      returned. else, returns None."""
       for sect in self._sections:
          if entry_id in sect:
             return sect
       return None
          
    def __str__(self):
-      return self._name
+      return self.name

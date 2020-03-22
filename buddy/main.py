@@ -55,9 +55,9 @@ def define_parser(save_data):
    create_parser.add_argument("--only", help="create only budget or only ledger", 
                               choices={"budget", "b", "ledger", "l"}, nargs="*")
    create_parser.add_argument("--name")
-   create_parser.add_argument("--from", type=parse_date, dest="from_date", 
+   create_parser.add_argument("--from", type=parse_date, dest="start", 
                               default=datetime.date.today())
-   create_parser.add_argument("--to", type=parse_date, dest="to_date")
+   create_parser.add_argument("--to", type=parse_date, dest="end")
    create_parser.add_argument("--link")
 
    # plan --------------------------------
@@ -81,14 +81,14 @@ def define_parser(save_data):
    # edit -------------------------------
    edit_parser = subparsers.add_parser("edit", help="edit groups or transactions",
                                        parents=[use_regex_parser, use_id_parser])
-   edit_parser.add_argument("--name")
-   edit_parser.add_argument("--amount", type=decimal.Decimal)
-   edit_parser.add_argument("--from", dest="from_date", type=parse_date)
-   edit_parser.add_argument("--to", dest="to_date", type=parse_date)
-   edit_parser.add_argument("--date", type=parse_date)
-   edit_parser.add_argument("--group")
-   edit_parser.add_argument("--link")
-   edit_parser.add_argument("--budget", "-b")
+   edit_parser.add_argument("--name") # all
+   edit_parser.add_argument("--amount", type=decimal.Decimal) # p, t
+   edit_parser.add_argument("--from", dest="start", type=parse_date) # b, l
+   edit_parser.add_argument("--to", dest="end", type=parse_date) # b, l
+   edit_parser.add_argument("--date", type=parse_date) # t
+   edit_parser.add_argument("--group") # t
+   edit_parser.add_argument("--link") # b, l
+   edit_parser.add_argument("--budget", "-b") 
    edit_parser.add_argument("--ledger", "-l")
    edit_parser.add_argument("--transaction", "-t")
    edit_parser.add_argument("--planned", "-p")
@@ -187,7 +187,7 @@ class DataNotFoundError(Exception):
    def __init__(self, msg):
       self.msg = msg
 
-class IncompleteSpecError(Exception):
+class InvalidSelectorError(Exception):
    def __init__(self, msg):
       self.msg = msg
 
@@ -285,30 +285,118 @@ def write_data(obj, path, *, hook=None):
 
 # helpers -------------
 
+BUDGET, LEDGER, PLANNED, TRANSACTION = 0, 1, 2, 3
 
+def selector(args):
+   """
+   returns an integer indicating which selector the given args object designates.
+   0: budget
+   1: ledger
+   2: planned_entry
+   3: transaction_entry
+   """
+   if args.transaction and args.ledger:
+      return TRANSACTION
+   elif args.planned and args.budget:
+      return PLANNED
+   elif args.ledger:
+      return LEDGER
+   elif args.budget:
+      return BUDGET
+   else:
+      return None
+
+def target_budget(bud_choice, budgets, use_id, use_regex):
+   "return the target budget id"
+   if not bud_choice:
+      raise InvalidSelectorError("no budget specified")
+   if not budgets:
+      raise NotInitializedError("no budgets created")
+   if use_id:
+      return bud_choice
+   else:
+      return parse_choice(budgets, bud_choice, regex=use_regex)
+
+def target_ledger(led_choice, ledgers, use_id, use_regex):
+   """return the target ledger id. if ledger not specified, raises InvalidSelectorError.
+   if the passed ledgers parameter is not defined, then raises NotInitializedError"""
+   if not led_choice:
+      raise InvalidSelectorError("no ledger specified")
+   if not ledgers:
+      raise NotInitializedError("no ledgers created")
+   if use_id:
+      return led_choice
+   else:
+      return parse_choice(ledgers, led_choice, regex=use_regex)
+
+def target_planned(planned_choice, bud_choice, budgets, use_id, use_regex):
+   "return the target budget id, and the target planned entry id"
+   if not planned_choice or not bud_choice:
+      raise InvalidSelectorError("no budget or planned entry specified")
+   if not budgets:
+      raise NotInitializedError("no budgets created")
+   if use_id:
+      if bud_choice not in budgets:
+         raise DataNotFoundError(f"budget {bud_choice} not found")
+      elif planned_choice not in budgets[bud_choice]:
+         raise DataNotFoundError(f"{planned_choice} not a planned entry in budget {bud_choice}")
+      return bud_choice, planned_choice
+   else:
+      budget_id = parse_choice(budgets, bud_choice, regex=use_regex)
+      if not budget_id:
+         raise DataNotFoundError(f"budget {bud_choice} not found")
+      planned_id = parse_choice(budgets[budget_id], planned_choice, 
+                                regex=use_regex, key=lambda entry: entry[1].name,
+                                print_out=lambda entry: f"{entry[1].name} <{entry[0]}>")
+      if not planned_id:
+         raise DataNotFoundError(f"{planned_choice} not a planned entry in {bud_choice}")
+      return budget_id, planned_id
+
+def target_transaction(tran_choice, led_choice, ledgers, use_id, use_regex):
+   "return the target ledger id, and the target transaction id"
+   if not tran_choice or not led_choice:
+      raise InvalidSelectorError("no ledger or transaction specified")
+   if not ledgers:
+      raise NotInitializedError("no ledgers created")
+   if use_id:
+      if led_choice not in ledgers:
+         raise DataNotFoundError(f"ledger {led_choice} not found")
+      elif tran_choice not in ledgers[led_choice]:
+         raise DataNotFoundError(f"{tran_choice} not a transaction in ledger {led_choice}")
+      return led_choice, tran_choice
+   else:
+      ledger_id = parse_choice(ledgers, led_choice, regex=use_regex)
+      if not ledger_id:
+         raise DataNotFoundError(f"ledger {led_choice} not found")
+      transaction_id = parse_choice(ledgers[ledger_id], tran_choice,
+                                    regex=use_regex, key=lambda tran: tran.name,
+                                    print_out=lambda tran: tran.name)
+      return ledger_id, transaction_id
+
+OBJ_SELECT = dict(zip(range(4), (target_budget, target_ledger, target_planned, target_transaction)))
 
 # create --------------
 
-def create_and_write_budget(args, new_budget_id, budgets, to_date):
+def create_and_write_budget(args, new_budget_id, budgets, end):
    name = args.name or f"Budget {new_budget_id}"
-   budgets[new_budget_id] = budget.Budget(name, args.from_date, to_date)
+   budgets[new_budget_id] = budget.Budget(name, args.start, end)
    write_data(budgets, budget_path, hook=obj_to_json_budgets)
 
-def create_and_write_ledger(args, new_ledger_id, ledgers, to_date):
+def create_and_write_ledger(args, new_ledger_id, ledgers, end):
    name = args.name or f"Ledger {new_ledger_id}"
-   ledgers[new_ledger_id] = ledger.Ledger(name, args.from_date, to_date)
+   ledgers[new_ledger_id] = ledger.Ledger(name, args.start, end)
    write_data(ledgers, ledger_path, hook=obj_to_json_ledgers)
 
 def create_handle(args, save_data):
    links = retrieve_data(linker_path, hook=linker.Linker.from_json)
    budgets = retrieve_data(budget_path, hook=json_to_obj_budgets) or dict()
    ledgers = retrieve_data(ledger_path, hook=json_to_obj_ledgers) or dict()
-   to_date = args.to_date or args.from_date + datetime.timedelta(weeks=4)
+   end = args.end or args.start + datetime.timedelta(weeks=4)
 
    if args.only == "budget":
       save_data["last_budget"] += 1
       new_budget_id = save_data["last_budget"]
-      create_and_write_budget(args, new_budget_id, budgets, to_date)
+      create_and_write_budget(args, new_budget_id, budgets, end)
       if args.link:
          ledger_link = (args.link if args.use_id 
             else parse_choice(ledgers, args.link, regex=args.use_regex))
@@ -319,7 +407,7 @@ def create_handle(args, save_data):
    elif args.only == "ledger":
       save_data["last_ledger"] += 1
       new_ledger_id = save_data["last_ledger"]
-      create_and_write_ledger(args, new_ledger_id, ledgers, to_date)
+      create_and_write_ledger(args, new_ledger_id, ledgers, end)
       if args.link:
          budget_link = (args.link if args.use_id 
             else parse_choice(budgets, args.link, regex=args.use_regex))
@@ -330,11 +418,11 @@ def create_handle(args, save_data):
    else:
       save_data["last_budget"] += 1
       new_budget_id = save_data["last_budget"]
-      create_and_write_budget(args, new_budget_id, budgets, to_date)
+      create_and_write_budget(args, new_budget_id, budgets, end)
 
       save_data["last_ledger"] += 1
       new_ledger_id = save_data["last_ledger"]
-      create_and_write_ledger(args, new_ledger_id, ledgers, to_date)
+      create_and_write_ledger(args, new_ledger_id, ledgers, end)
 
       links.create_link(new_budget_id, new_ledger_id)
 
@@ -363,62 +451,72 @@ def plan_handle(args, save_data):
 def remove_handle(args, save_data): 
    budgets = retrieve_data(budget_path, hook=json_to_obj_budgets)
    ledgers = retrieve_data(ledger_path, hook=json_to_obj_ledgers)
-   # remove transaction ----------
-   if args.transaction:
-      if not args.ledger:
-         raise IncompleteSpecError(f"can't find transaction {args.transaction} without ledger")
-      if not ledgers:
-         raise NotInitializedError("no ledgers created")
-      ledger_id = (args.ledger if args.use_id 
-                   else parse_choice(ledgers, args.ledger, regex=args.use_regex))
-      if not ledger_id or ledger_id not in ledgers:
-         raise DataNotFoundError(f"ledger {args.ledger} not found")
-      transaction_id = (args.transaction if args.use_id else 
-                        parse_choice(ledgers[ledger_id], args.transaction, regex=args.use_regex))
-      if not transaction_id or transaction_id not in ledgers[ledger_id]:
-         raise DataNotFoundError(f"transaction {args.transaction} not found")
-      ledgers[ledger_id].remove(transaction_id)
-   # remove budget entry ------------------
-   elif args.planned:
-      if not args.budget:
-         raise IncompleteSpecError(f"can't find entry {args.planned} without budget")
-      if not budgets:
-         raise NotInitializedError("no budgets created")
-      budget_id = (args.budget if args.use_id
-                   else parse_choice(budgets, args.budget, regex=args.use_regex))
-      if not budget_id or budget_id not in budgets:
-         raise DataNotFoundError(f"budget {args.budget} not found")
-      planned_id = (args.planned if args.use_id else 
-                    parse_choice(budgets[budget_id], args.planned, regex=args.use_regex,
-                                 key=lambda entry: entry[1].name, 
-                                 print_out=lambda entry: f"{entry[1].name} {entry[0]}"))
-      if not planned_id or planned_id not in budgets[budget_id]:
-         raise DataNotFoundError(f"planned entry {args.planned} not found")
+   links = retrieve_data(linker_path, hook=linker.Linker.from_json)
+
+   select = selector(args)
+   if not select:
+      raise InvalidSelectorError(f"not a valid selector")
+   target = OBJ_SELECT[select]
+   if select == BUDGET:
+      del budgets[target(args.budget, budgets, args.use_id, args.use_regex)]
+   elif select == LEDGER:
+      del ledgers[target(args.ledger, ledgers, args.use_id, args.use_regex)]
+   elif select == PLANNED:
+      budget_id, planned_id = target(args.planned, args.budget, budgets, 
+                                     args.use_id, args.use_regex)
       budgets[budget_id].section(planned_id).remove(planned_id)
-   # remove ledger -------------------
-   elif args.ledger:
-      if not ledgers:
-         raise NotInitializedError("no ledgers created")
-      ledger_id = (args.ledger if args.use_id
-                   else parse_choice(ledgers, args.ledger, regex=args.use_regex))
-      if not ledger_id or ledger_id not in ledgers:
-         raise DataNotFoundError(f"ledger {args.ledger} not found")
-      del ledgers[ledger_id]
-   # remove budget ---------------------
-   elif args.budget:
-      if not budgets:
-         raise NotInitializedError("no budgets created")
-      budget_id = (args.budget if args.use_id
-                   else parse_choice(budgets, args.budger, regex=args.use_regex))
-      if not budget_id or budget_id not in budgets:
-         raise DataNotFoundError(f"budget {args.budget} not found")
-      del budgets[budget_id]
-   
    else:
-      raise IncompleteSpecError(f"nothing to remove specified")
+      ledger_id, transaction_id = target(args.transaction, args.ledger, ledgers, 
+                                         args.use_id, args.use_regex)
+      ledgers[ledger_id].remove(transaction_id)
+
+   write_data(budgets, budget_path, hook=obj_to_json_budgets)
+   write_data(ledgers, ledger_path, hook=obj_to_json_ledgers)
+   write_data(links, linker_path, hook=linker.Linker.to_json)
       
 def edit_handle(args, save_data): # edit links
-   pass
+   budgets = retrieve_data(budget_path, hook=json_to_obj_budgets)
+   ledgers = retrieve_data(ledger_path, hook=json_to_obj_ledgers)
+   links = retrieve_data(linker_path, hook=linker.Linker.from_json)
+   select = selector(args)
+   if not select:
+      raise InvalidSelectorError(f"not a valid selector")
+   target = OBJ_SELECT[select]
+   if select == BUDGET:
+      target_budget = budgets[target(args.budget, budgets, args.use_id, args.use_regex)]
+      target_budget.name = args.name or target_budget.name
+      target_budget.start = args.start or target_budget.start
+      target_budget.end = args.end or target_budget.end
+      if args.link:
+         pass
+   elif select == LEDGER:
+      target_ledger = ledgers[target(args.ledger, ledgers, args.use_id, args.use_regex)]
+      target_ledger.name = args.name or target_ledger.name
+      target_ledger.start = args.start or target_ledger.start
+      target_ledger.end = args.end or target_ledger.end
+      if args.link:
+         pass
+   elif select == PLANNED:
+      planned, bud = target(args.planned, args.budget, budgets, args.use_id, args.use_regex)
+      _, target_planned = budgets[bud][planned]
+      target_planned.name = args.name or target_planned.name
+      target_planned.expected = args.amount or target_planned.amount
+   else:
+      trans, led = target(args.transaction, args.ledger, ledgers, args.use_id, args.use_regex)
+      target_trans = ledgers[led][trans]
+      target_trans.name = args.name or target_trans.name
+      target_trans.amount = args.amount or target_trans.amount
+      target_trans.date = args.date or target_trans.date
+      if args.group:
+         pass
+
+   # ("--name") # all
+   # ("--amount", type=decimal.Decimal) # p, t
+   # ("--from", dest="start", type=parse_date) # b, l
+   # ("--to", dest="end", type=parse_date) # b, l
+   # ("--date", type=parse_date) # t
+   # ("--group") # t
+   # ("--link") # b, l
 
 def transaction_handle(args, save_data):
    pass
