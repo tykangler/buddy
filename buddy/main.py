@@ -11,6 +11,7 @@ import budget
 import form
 import ledger
 import linker
+import user
 
 INTRO = "Hi {0}! I'm Buddy!"
 DEFAULT_DATE = (datetime.date.today(), 
@@ -22,6 +23,7 @@ budget_path = os.path.join(data_dir, "budget.json")
 ledger_path = os.path.join(data_dir, "ledger.json")
 user_path = os.path.join(data_dir, "user.json")
 linker_path = os.path.join(data_dir, "relationships.json")
+assigner_path = os.path.join(data_dir, "id.json")
 
 SECTIONS = ["income", "expense"]
 
@@ -30,20 +32,20 @@ def main():
    save_data = retrieve_data(user_path)
 
    # parse arguments
-   parser = define_parser(save_data)
+   parser = define_parser(save_data["user_name"])
    args = parser.parse_args()
    args.func(args, save_data)
 
-def define_parser(save_data):
-   parser = argparse.ArgumentParser(description=INTRO.format(save_data["name"]))
+def define_parser(user_name):
+   parser = argparse.ArgumentParser(description=INTRO.format(user_name))
    subparsers = parser.add_subparsers(dest="command")
 
    # parents -----------------------------
    use_regex_parser = argparse.ArgumentParser(add_help=False)
-   use_regex_parser.add_argument("--use-regex", "-r", action="store_true", default=save_data["use_regex"])
+   use_regex_parser.add_argument("--use-regex", "-r", action="store_true")
 
    use_id_parser = argparse.ArgumentParser(add_help=False)
-   use_id_parser.add_argument("--use-id", "-i", action="store_true", default=save_data["use_id"])
+   use_id_parser.add_argument("--use-id", "-i", action="store_true")
 
    # report ------------------------------
    # report_parser = subparsers.add_parser("report", help="report budget plan")
@@ -313,9 +315,14 @@ def target_budget(bud_choice, budgets, use_id, use_regex):
    if not budgets:
       raise NotInitializedError("no budgets created")
    if use_id:
+      if bud_choice not in budgets:
+         raise DataNotFoundError(f"budget {bud_choice} not found")
       return bud_choice
    else:
-      return parse_choice(budgets, bud_choice, regex=use_regex)
+      budget_id = parse_choice(budgets, bud_choice, regex=use_regex)
+      if not budget_id:
+         raise DataNotFoundError(f"budget {budget_id} not found")
+      return budget_id
 
 def target_ledger(led_choice, ledgers, use_id, use_regex):
    """return the target ledger id. if ledger not specified, raises InvalidSelectorError.
@@ -325,9 +332,14 @@ def target_ledger(led_choice, ledgers, use_id, use_regex):
    if not ledgers:
       raise NotInitializedError("no ledgers created")
    if use_id:
+      if led_choice not in ledgers:
+         raise DataNotFoundError(f"ledger {led_choice} not found")
       return led_choice
    else:
-      return parse_choice(ledgers, led_choice, regex=use_regex)
+      ledger_id = parse_choice(ledgers, led_choice, regex=use_regex)
+      if not ledger_id:
+         raise DataNotFoundError(f"ledger {ledger_id} not found")
+      return ledger_id
 
 def target_planned(planned_choice, bud_choice, budgets, use_id, use_regex):
    "return the target budget id, and the target planned entry id"
@@ -388,63 +400,51 @@ def create_and_write_ledger(args, new_ledger_id, ledgers, end):
    write_data(ledgers, ledger_path, hook=obj_to_json_ledgers)
 
 def create_handle(args, save_data):
-   links = retrieve_data(linker_path, hook=linker.Linker.from_json)
+   links = retrieve_data(linker_path, hook=linker.Linker.from_json) or linker.Linker()
    budgets = retrieve_data(budget_path, hook=json_to_obj_budgets) or dict()
    ledgers = retrieve_data(ledger_path, hook=json_to_obj_ledgers) or dict()
+   assigner = (retrieve_data(assigner_path, hook=user.Assigner.from_json) 
+               or user.Assigner(["budget", "ledger"]))
    end = args.end or args.start + datetime.timedelta(weeks=4)
-
    if args.only == "budget":
-      save_data["last_budget"] += 1
-      new_budget_id = save_data["last_budget"]
+      new_budget_id = assigner.next_id(args.only)
       create_and_write_budget(args, new_budget_id, budgets, end)
       if args.link:
-         ledger_link = (args.link if args.use_id 
-            else parse_choice(ledgers, args.link, regex=args.use_regex))
-         if not ledger_link or ledger_link not in ledgers:
-            raise DataNotFoundError(f"ledger with id {ledger_link} not found")
+         ledger_link = target_ledger(args.link, ledgers, args.use_id, args.use_regex)
          links.create_link(new_budget_id, ledger_link)
-
    elif args.only == "ledger":
-      save_data["last_ledger"] += 1
-      new_ledger_id = save_data["last_ledger"]
+      new_ledger_id = assigner.next_id(args.only)
       create_and_write_ledger(args, new_ledger_id, ledgers, end)
       if args.link:
-         budget_link = (args.link if args.use_id 
-            else parse_choice(budgets, args.link, regex=args.use_regex))
-         if not budget_link or budget_link not in budgets:
-            raise DataNotFoundError(f"budget with id {budget_link} not found")
+         budget_link = target_budget(args.budget, budgets, args.use_id, args.use_regex)
          links.create_link(budget_link, new_ledger_id)
-
    else:
-      save_data["last_budget"] += 1
-      new_budget_id = save_data["last_budget"]
+      new_budget_id = assigner.next_id("budget")
       create_and_write_budget(args, new_budget_id, budgets, end)
-
-      save_data["last_ledger"] += 1
-      new_ledger_id = save_data["last_ledger"]
+      new_ledger_id = assigner.next_id("ledger")
       create_and_write_ledger(args, new_ledger_id, ledgers, end)
-
       links.create_link(new_budget_id, new_ledger_id)
-
    write_data(links, linker_path, hook=linker.Linker.to_json)
 
 # plan -------------------------- TODO error checking
 
 def plan_handle(args, save_data): 
-   def add_entries_from_dict(budget_sec, save_data):
+   def add_entries_from_dict(target_budget_id, budget_sec, assigner):
       for entry_name in args.entries:
-         save_data["last_planned"] += 1
-         budget_sec.add(save_data["last_planned"], entry_name, args.entries[entry_name])
-   budgets = retrieve_data(budget_path, hook=json_to_obj_budgets)
+         next_planned = assigner.next_id("budget", target_budget_id)
+         budget_sec.add(next_planned, entry_name, args.entries[entry_name])
+   budgets = retrieve_data(budget_path, hook=json_to_obj_budgets) 
+   assigner = retrieve_data(assigner_path, hook=user.Assigner.from_json)
    if not budgets:
       raise NotInitializedError(f"no budgets have been created")
-   target_budget_id = (args.budget if args.use_id 
-      else parse_choice(budgets, args.budget, regex=args.use_regex))
-   target_budget = budgets[target_budget_id]
+   if not assigner:
+      raise NotInitializedError(f"assigner not created")
+   target_budget_id = target_budget(args.budget, budgets, args.use_id, args.use_regex)
+   target = budgets[target_budget_id]
    if args.section == "income" or args.section == "i":
-      add_entries_from_dict(target_budget.income(), save_data)
+      add_entries_from_dict(target_budget_id, target.income(), assigner)
    elif args.section == "expense" or args.section == "e":
-      add_entries_from_dict(target_budget.expense(), save_data)
+      add_entries_from_dict(target_budget_id, target.expense(), assigner)
 
 # remove -------------------------
 
@@ -473,6 +473,8 @@ def remove_handle(args, save_data):
    write_data(budgets, budget_path, hook=obj_to_json_budgets)
    write_data(ledgers, ledger_path, hook=obj_to_json_ledgers)
    write_data(links, linker_path, hook=linker.Linker.to_json)
+
+# edit ----------------------------------
       
 def edit_handle(args, save_data): # edit links
    budgets = retrieve_data(budget_path, hook=json_to_obj_budgets)
@@ -510,17 +512,20 @@ def edit_handle(args, save_data): # edit links
       if args.group:
          pass
 
-   # ("--name") # all
-   # ("--amount", type=decimal.Decimal) # p, t
-   # ("--from", dest="start", type=parse_date) # b, l
-   # ("--to", dest="end", type=parse_date) # b, l
-   # ("--date", type=parse_date) # t
-   # ("--group") # t
-   # ("--link") # b, l
+# spend/earn -----------------------------
 
 def transaction_handle(args, save_data):
-   pass
-   
+   ledgers = retrieve_data(ledger_path, hook=json_to_obj_ledgers)
+   led :ledger.Ledger = target_ledger(args.ledger, ledgers, args.use_id, args.use_regex)
+   save_data["last_transaction"] += 1
+   if args.command == "earn":
+      led.enter(save_data["last_transaction"], args.name, args.amount, args.date)
+      if args.group:
+         pass
+   elif args.command == "spend":
+      pass
+   else:
+      pass
 # endregion
 
 # ---------------------
