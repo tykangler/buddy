@@ -1,12 +1,10 @@
 from decimal import Decimal
 import datetime as dt
 
-import tag
-
 class TransactionError(Exception):
    pass
 
-class Transaction(tag.Taggable):
+class Transaction:
    MAX_NOTE_LEN = 50
    def __init__(self, debits: dict, credits: dict, note):
       amts_to_dec = lambda entry: {account: Decimal(entry[account]) for account in entry} 
@@ -24,7 +22,6 @@ class Transaction(tag.Taggable):
       if debits_sum != credits_sum:
          raise TransactionError(f"debit of {debits_sum} doesn't match credit of {credits_sum}")
       self._total = debits_sum
-      super().__init__()
 
    @property
    def note(self):
@@ -58,11 +55,10 @@ class Transaction(tag.Taggable):
          raise KeyError(f"{account} not a credited account in this transaction")
       return self._credits[account]
 
-class Journal(tag.Taggable):
+class Journal():
    def __init__(self):
       self._entries = dict()
       self._total = Decimal(0)
-      super().__init__()
 
    def __getitem__(self, val):
       "retrieve a transaction at a date or within a range of dates if val is a slice"
@@ -77,8 +73,10 @@ class Journal(tag.Taggable):
       else:
          return self._entries[val]
 
-   def __setitem__(self, val, transaction: Transaction):
-      self._entries[val] = transaction
+   def __setitem__(self, date, transaction: Transaction):
+      if date not in self._entries:
+         self._entries[date] = []
+      self._entries[date].append(transaction)
       self._total += transaction.total
 
    def __iter__(self):
@@ -86,7 +84,3 @@ class Journal(tag.Taggable):
 
    def __len__(self):
       return len(self._entries)
-
-   @property
-   def total(self):
-      return self._total

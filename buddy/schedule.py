@@ -2,8 +2,6 @@ import datetime as dt
 import math
 from decimal import Decimal
 
-import tag
-
 class ScheduleError(Exception):
    pass
 
@@ -13,7 +11,7 @@ def __calc_schedule_periods(start: dt.date, last: dt.date, perlen: dt.timedelta)
    delta = last - start
    return math.ceil(delta / perlen)
 
-class Schedule(tag.Taggable):
+class Schedule:
    def __init__(self, account, start, *, 
                 last: dt.date=None, periods: int=None, perlen: dt.timedelta=None):
       if [last, periods, perlen].count(None) != 1:
@@ -29,7 +27,6 @@ class Schedule(tag.Taggable):
       else:
          periods = __calc_schedule_periods(start, last, perlen)
       self._schedule = {start + perlen * per: Decimal(0) for per in range(1, periods + 1)}
-      super.__init__()
 
    def __iter__(self):
       return iter(self._schedule)
