@@ -28,3 +28,6 @@ def parse_date(date_str: str):
                        (day, month, year))
       day, month, year = unpack_date(*date_parts)
       return datetime.date(year, month, day)
+
+def parse_dist(dist_str):
+   pass

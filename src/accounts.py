@@ -50,17 +50,26 @@ class Section:
    def __iter__(self):
       return self.AccountIterator(self)
 
+def create_statement(header1, header2):
+   return {header1: Section(header1), header2: Section(header2)}
+
 def balance(statement):
    if len(statement) > 2:
       raise ValueError(f"statement has {len(statement)} sections, but only two allowed")
    value_in, value_out = statement
    return value_in - value_out
 
-def create_budget(name, start, end, *, roll=False, clone=None):
-   budget = dict(name=name, start=start, end=end, 
-                 roll=roll, income=Section("income"), expense=Section("expense"))
+def create_budget(start, end, *, roll=False, clone=None):
+   budget = dict(start=start, end=end, roll=roll)
    if clone:
       budget["income"] = copy.deepcopy(clone["income"])
       budget["expense"] = copy.deepcopy(clone["expense"])
+   else:
+      budget.update(create_statement("income", "expense"))
    return budget
 
+def create_snapshot(start, end):
+   return dict(start=start, end=end, 
+               balance=create_statement("assets", "liabilities"),
+               profit=create_statement("income", "expenses"), 
+               cash=create_statement("inflow", "outflow"))
